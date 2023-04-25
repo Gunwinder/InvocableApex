@@ -1,0 +1,127 @@
+Original script by Shane McLaughlin : demo - https://www.youtube.com/watch?v=RJvga1rFFsA&t=650s&ab_channel=ShaneMcLaughlin
+===========================================================================================================================
+
+public with sharing class PBBDashboardRefresh {
+
+	//pass it a dashboard Id.  It'll fail silently if the callout isn't working.
+	//feel free to implement your own error logging stuff
+
+	//test DB: 01Zj0000000GQFI
+
+	@InvocableMethod(label='Refresh a dashboard')
+	public static void RefreshDashboard(list<string> DashboardIds) {
+
+		//we need something to batch the dashboard stuff.
+		list<string> DBBatch = new list<string>();
+		list<list<string>> Batches = new list<list<string>>();
+
+		Integer Batchsize = Limits.GetLimitCallouts();
+
+		for (string dashboardId:PBBUtilities.dedupe(DashboardIds)){
+			//batch is full, put it in the batch list, blank it for new adds
+			if (DBBatch.size()==Batchsize){
+				Batches.add(DBBatch);
+				DBBatch = new list<string>();
+			} 				
+			DBBatch.add(dashboardId);
+		}
+
+		//add the final batch in
+		Batches.add(DBBatch);
+		
+		//send each batch to the callout method
+		for (list<string> batch:batches){
+			refreshSomeDashboards(batch, userInfo.getSessionId());
+		}
+
+	}
+
+	//has to be handled as an @future transaction because of callout required to reporting REST API
+	@future(callout=true)
+	public static void refreshSomeDashboards (list<string> dashboardIds, string sessionId){
+		
+		for (string dbid:dashboardIds){
+			String requestUrl = '/services/data/v31.0/analytics/dashboards/'+dbid;
+			Http http = new Http();
+			HttpRequest req = new HttpRequest();
+			req.setEndpoint(URL.getSalesforceBaseUrl().toExternalForm() + requestUrl);
+			req.setMethod('PUT');
+			req.setHeader('Authorization', 'OAuth ' + sessionId);
+			req.setBody('{}');
+			system.debug(req);
+
+			HTTPResponse res = http.send(req);
+			String output = res.getBody();
+			System.debug(output);
+
+
+		}
+	}
+
+	
+
+	
+}
+
+
+
+========  TEST CLASS ========
+
+
+@isTest
+private class PBBDashboardRefreshTest {
+
+    @isTest
+    static void testRefreshDashboard() {
+        // Create a test dashboard
+        Dashboard dashboard = new Dashboard();
+        dashboard.DeveloperName = 'Test_Dashboard';
+        dashboard.FolderId = UserInfo.getUserId();
+        dashboard.Name = 'Test Dashboard';
+        dashboard.RunningUserMode = 'User';
+        dashboard.Type = 'LoggedInUser';
+        insert dashboard;
+
+        // Call the RefreshDashboard method with the test dashboard Id
+        list<string> dashboardIds = new list<string>();
+        dashboardIds.add(dashboard.Id);
+        PBBDashboardRefresh.RefreshDashboard(dashboardIds);
+
+        // Assert that the dashboard was refreshed
+        Dashboard refreshedDashboard = [SELECT Id, LastViewedDate FROM Dashboard WHERE Id = :dashboard.Id];
+        system.assertNotEquals(refreshedDashboard.LastViewedDate, dashboard.LastViewedDate);
+    }
+
+    @isTest
+    static void testRefreshDashboardWithMultipleDashboards() {
+        // Create two test dashboards
+        Dashboard dashboard1 = new Dashboard();
+        dashboard1.DeveloperName = 'Test_Dashboard_1';
+        dashboard1.FolderId = UserInfo.getUserId();
+        dashboard1.Name = 'Test Dashboard 1';
+        dashboard1.RunningUserMode = 'User';
+        dashboard1.Type = 'LoggedInUser';
+        insert dashboard1;
+
+        Dashboard dashboard2 = new Dashboard();
+        dashboard2.DeveloperName = 'Test_Dashboard_2';
+        dashboard2.FolderId = UserInfo.getUserId();
+        dashboard2.Name = 'Test Dashboard 2';
+        dashboard2.RunningUserMode = 'User';
+        dashboard2.Type = 'LoggedInUser';
+        insert dashboard2;
+
+        // Call the RefreshDashboard method with the test dashboard Ids
+        list<string> dashboardIds = new list<string>();
+        dashboardIds.add(dashboard1.Id);
+        dashboardIds.add(dashboard2.Id);
+        PBBDashboardRefresh.RefreshDashboard(dashboardIds);
+
+        // Assert that the dashboards were refreshed
+        Dashboard refreshedDashboard1 = [SELECT Id, LastViewedDate FROM Dashboard WHERE Id = :dashboard1.Id];
+        system.assertNotEquals(refreshedDashboard1.LastViewedDate, dashboard1.LastViewedDate);
+
+        Dashboard refreshedDashboard2 = [SELECT Id, LastViewedDate FROM Dashboard WHERE Id = :dashboard2.Id];
+        system.assertNotEquals(refreshedDashboard2.LastViewedDate, dashboard2.LastViewedDate);
+    }
+}
